@@ -2517,6 +2517,7 @@ void _dump_job_details(struct job_details *detail_ptr, Buf buffer)
 	pack32(detail_ptr->cpu_freq_max, buffer);
 	pack32(detail_ptr->cpu_freq_gov, buffer);
 	pack_time(detail_ptr->begin_time, buffer);
+	pack_time(detail_ptr->accrue_time, buffer);
 	pack_time(detail_ptr->submit_time, buffer);
 
 	packstr(detail_ptr->req_nodes,  buffer);
@@ -2562,7 +2563,7 @@ static int _load_job_details(struct job_record *job_ptr, Buf buffer,
 	uint16_t cpu_bind_type, mem_bind_type, plane_size;
 	uint8_t open_mode, overcommit, prolog_running;
 	uint8_t share_res, whole_node;
-	time_t begin_time, submit_time;
+	time_t begin_time, accrue_time = 0, submit_time;
 	int i;
 	multi_core_data_t *mc_ptr;
 
@@ -2603,6 +2604,7 @@ static int _load_job_details(struct job_record *job_ptr, Buf buffer,
 		safe_unpack32(&cpu_freq_max, buffer);
 		safe_unpack32(&cpu_freq_gov, buffer);
 		safe_unpack_time(&begin_time, buffer);
+		safe_unpack_time(&accrue_time, buffer);
 		safe_unpack_time(&submit_time, buffer);
 
 		safe_unpackstr_xmalloc(&req_nodes,  &name_len, buffer);
@@ -2784,6 +2786,7 @@ static int _load_job_details(struct job_record *job_ptr, Buf buffer,
 	job_ptr->details->acctg_freq = acctg_freq;
 	job_ptr->details->argc = argc;
 	job_ptr->details->argv = argv;
+	job_ptr->details->accrue_time = accrue_time;
 	job_ptr->details->begin_time = begin_time;
 	job_ptr->details->contiguous = contiguous;
 	job_ptr->details->core_spec = core_spec;
@@ -10033,7 +10036,7 @@ void pack_job(struct job_record *dump_job_ptr, uint16_t show_flags, Buf buffer,
 	      uint16_t protocol_version, uid_t uid)
 {
 	struct job_details *detail_ptr;
-	time_t begin_time = 0, start_time = 0, end_time = 0;
+	time_t accrue_time = 0, begin_time = 0, start_time = 0, end_time = 0;
 	uint32_t time_limit;
 	char *nodelist = NULL;
 	assoc_mgr_lock_t locks = { NO_LOCK, NO_LOCK, READ_LOCK, NO_LOCK,
@@ -10091,12 +10094,15 @@ void pack_job(struct job_record *dump_job_ptr, uint16_t show_flags, Buf buffer,
 			pack_time(dump_job_ptr->details->submit_time, buffer);
 			/* Earliest possible begin time */
 			begin_time = dump_job_ptr->details->begin_time;
+			/* When we started accruing time for priority */
+			accrue_time = dump_job_ptr->details->accrue_time;
 		} else {   /* Some job details may be purged after completion */
 			pack32(NICE_OFFSET, buffer);	/* Best guess */
 			pack_time((time_t) 0, buffer);
 		}
 
 		pack_time(begin_time, buffer);
+		pack_time(accrue_time, buffer);
 
 		if (IS_JOB_STARTED(dump_job_ptr)) {
 			/* Report actual start time, in past */
@@ -15413,6 +15419,7 @@ void batch_requeue_fini(struct job_record  *job_ptr)
 						  SLURM_CRED_OPT_EXPIRY_WINDOW,
 						  &cred_lifetime);
 			job_ptr->details->begin_time = now + cred_lifetime + 1;
+			job_ptr->details->accrue_time = 0;
 		}
 
 		/* Since this could happen on a launch we need to make sure the
